@@ -62,8 +62,24 @@ function commandLooksLike(command: string, expected: string): boolean {
   return base === expected || base === `${expected}.cmd` || base === `${expected}.exe`;
 }
 
-function summarizeProbeDetail(stdout: string, stderr: string, parsedError: string | null): string | null {
-  const raw = parsedError?.trim() || firstNonEmptyLine(stderr) || firstNonEmptyLine(stdout);
+const CODEX_PATH_ALIAS_WARNING_RE =
+  /^WARNING: proceeding, even though we could not create PATH aliases:/;
+
+function firstActionableStderrLine(stderr: string): string {
+  return (
+    stderr
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0 && !CODEX_PATH_ALIAS_WARNING_RE.test(line)) ?? ""
+  );
+}
+
+export function summarizeProbeDetail(stdout: string, stderr: string, parsedError: string | null): string | null {
+  const raw =
+    parsedError?.trim() ||
+    firstActionableStderrLine(stderr) ||
+    firstNonEmptyLine(stdout) ||
+    firstNonEmptyLine(stderr);
   if (!raw) return null;
   const clean = raw.replace(/\s+/g, " ").trim();
   const max = 240;
