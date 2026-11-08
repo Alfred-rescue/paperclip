@@ -479,6 +479,7 @@ const TRANSIENT_INFRA_CONTINUATION_ERROR_CODES = new Set<string>([
 
 const NON_RETRYABLE_CONTINUATION_ERROR_CODES = new Set<string>([
   "adapter_engine_unavailable",
+  "refresh_token_invalidated",
   "agent_not_invokable",
   "agent_not_found",
   "budget_blocked",
