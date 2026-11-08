@@ -43,6 +43,18 @@ describe("normalizeIssueExecutionPolicy", () => {
     expect(normalizeIssueExecutionPolicy({ stages: [] })).toBeNull();
   });
 
+  it("preserves an execution-attempt budget without stages", () => {
+    expect(normalizeIssueExecutionPolicy({
+      maxExecutionAttempts: 1,
+      stages: [],
+    })).toEqual({
+      mode: "normal",
+      commentRequired: true,
+      maxExecutionAttempts: 1,
+      stages: [],
+    });
+  });
+
   it("throws when all participants are invalid (missing agentId)", () => {
     expect(() =>
       normalizeIssueExecutionPolicy({
