@@ -472,7 +472,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       createdAt: now,
       updatedAt: now,
     });
-  }, 20_000);
+  }, 120_000);
 
   afterEach(async () => {
     vi.clearAllMocks();
@@ -5407,6 +5407,61 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         (event) => event.action === "issue.successful_run_handoff_required",
       ),
     ).toBe(true);
+  });
+
+  it("blocks instead of launching a successful-run handoff beyond the issue attempt budget", async () => {
+    const { agentId, runId, issueId } = await seedQueuedIssueRunFixture();
+    await db
+      .update(issues)
+      .set({ executionPolicy: { maxExecutionAttempts: 1 } })
+      .where(eq(issues.id, issueId));
+    mockAdapterExecute.mockResolvedValueOnce({
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      errorMessage: null,
+      summary: "Completed the bounded task without choosing a disposition.",
+      provider: "test",
+      model: "test-model",
+    });
+    const heartbeat = heartbeatService(db);
+
+    await heartbeat.resumeQueuedRuns();
+    await waitForRunToSettle(heartbeat, runId, 5_000);
+    await waitForHeartbeatIdle(db, 5_000);
+
+    const wakeups = await db
+      .select()
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.agentId, agentId));
+    expect(
+      wakeups.filter(
+        (wakeup) => wakeup.reason === "finish_successful_run_handoff",
+      ),
+    ).toHaveLength(0);
+
+    const issue = await waitForValue(async () => {
+      const current = await db
+        .select({ status: issues.status })
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .then((rows) => rows[0] ?? null);
+      return current?.status === "blocked" ? current : null;
+    }, 5_000);
+    expect(issue?.status).toBe("blocked");
+
+    const budgetComment = await waitForValue(async () => {
+      const comments = await db
+        .select()
+        .from(issueComments)
+        .where(eq(issueComments.issueId, issueId));
+      return (
+        comments.find((comment) =>
+          comment.body.includes("configured execution-attempt budget"),
+        ) ?? null
+      );
+    }, 5_000);
+    expect(budgetComment).toBeTruthy();
   });
 
   it("requeues a missing-disposition handoff when the previous corrective wake was cancelled", async () => {

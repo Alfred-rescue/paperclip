@@ -490,6 +490,7 @@ import {
 import { withRecoveryContext } from "./recovery/status-only-context.js";
 import {
   ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS as RECOVERY_ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
+  isAutomaticRecoveryAttemptBudgetExhausted,
   recoveryService,
 } from "./recovery/service.js";
 import {
@@ -13196,23 +13197,45 @@ export function heartbeatService(
     }
 
     const issue = await db
-      .select({
-        id: issues.id,
-        companyId: issues.companyId,
-        identifier: issues.identifier,
-        title: issues.title,
-        description: issues.description,
-        status: issues.status,
-        assigneeAgentId: issues.assigneeAgentId,
-        assigneeUserId: issues.assigneeUserId,
-        executionState: issues.executionState,
-        monitorNextCheckAt: issues.monitorNextCheckAt,
-        projectId: issues.projectId,
-        originKind: issues.originKind,
-      })
+      .select()
       .from(issues)
       .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId)))
       .then((rows) => rows[0] ?? null);
+    const isCorrectiveHandoffRun =
+      readNonEmptyString(context.wakeReason) ===
+        FINISH_SUCCESSFUL_RUN_HANDOFF_REASON ||
+      readNonEmptyString(context.handoffReason) ===
+        SUCCESSFUL_RUN_MISSING_STATE_REASON;
+    const rawHandoffAttempt = context.handoffAttempt;
+    const completedAutomaticRetries = isCorrectiveHandoffRun
+      ? typeof rawHandoffAttempt === "number" &&
+        Number.isInteger(rawHandoffAttempt) &&
+        rawHandoffAttempt > 0
+        ? rawHandoffAttempt
+        : 1
+      : 0;
+    if (
+      issue &&
+      (issue.status === "todo" || issue.status === "in_progress") &&
+      isAutomaticRecoveryAttemptBudgetExhausted(
+        issue.executionPolicy,
+        completedAutomaticRetries,
+      )
+    ) {
+      await recovery.escalateStrandedAssignedIssue({
+        issue,
+        previousStatus: issue.status,
+        latestRun: run,
+        notice: {
+          title: "Execution attempt limit reached",
+          tone: "danger",
+          body:
+            "Paperclip did not start another automatic run because this issue has consumed its configured execution-attempt budget. " +
+            "The issue is blocked for an explicit remediation decision.",
+        },
+      });
+      return;
+    }
     const idempotencyKey = issue
       ? buildFinishSuccessfulRunHandoffIdempotencyKey({
           issueId: issue.id,
