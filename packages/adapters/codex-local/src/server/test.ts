@@ -402,7 +402,10 @@ export async function testEnvironment(
     } else {
       const execArgs = buildCodexExecArgs(
         { ...config, fastMode: false },
-        { skipGitRepoCheck: targetIsSandbox },
+        // The hello probe verifies provider authentication and model response,
+        // not repository trust. It must also work from a valid non-repository
+        // cwd such as the responsible user's home directory.
+        { skipGitRepoCheck: true },
       );
       // A connection test needs one small response, not plugin catalog sync,
       // repository instructions, or a durable session. Keep provider/model
@@ -422,12 +425,12 @@ export async function testEnvironment(
           hint: "Switch the agent model to GPT-5.4 or enter a manual model ID to enable Codex Fast mode.",
         });
       }
-      if (targetIsSandbox) {
+      if (args.includes("--skip-git-repo-check")) {
         checks.push({
           code: "codex_git_repo_check_skipped",
           level: "info",
-          message: "Added --skip-git-repo-check for sandbox hello probes.",
-          hint: "Codex requires an explicit trust bypass in headless remote sandbox workspaces.",
+          message: "Added --skip-git-repo-check for the repository-independent hello probe.",
+          hint: "The connection test verifies provider access without requiring its working directory to be a trusted Git repository.",
         });
       }
 

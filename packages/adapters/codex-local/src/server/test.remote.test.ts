@@ -139,6 +139,31 @@ describe("codex remote environment diagnostics", () => {
     }
   });
 
+  it("skips the Git repository check for a local hello probe", async () => {
+    const result = await testEnvironment({
+      companyId: "company-1",
+      adapterType: "codex_local",
+      config: {
+        engine: "cli",
+        command: "codex",
+        cwd: "C:\\Users\\operator",
+        env: {
+          OPENAI_API_KEY: "sk-test",
+        },
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    const probeCall = runAdapterExecutionTargetProcess.mock.calls[0] as unknown as
+      | [string, null, string, string[], { cwd: string; env: Record<string, string> }]
+      | undefined;
+    expect(probeCall?.[3]).toContain("--skip-git-repo-check");
+    expect(result.checks).toContainEqual(expect.objectContaining({
+      code: "codex_git_repo_check_skipped",
+      level: "info",
+    }));
+  });
+
   it("stages managed CODEX_HOME in an isolated runtime dir and keeps the probe cwd on the original remote workspace", async () => {
     const remoteTarget: AdapterExecutionTarget = {
       kind: "remote",
@@ -183,9 +208,9 @@ describe("codex remote environment diagnostics", () => {
     // The probe must upload only a minimal credentials-only home, never the
     // full managed CODEX_HOME (which can be hundreds of MB of session history).
     const homeAsset = runtimeInput?.assets?.find((asset) => asset.key === "home");
-    expect(homeAsset?.localDir).toContain(`${os.tmpdir()}/paperclip-codex-probe-home-`);
+    expect(homeAsset?.localDir).toContain(path.join(os.tmpdir(), "paperclip-codex-probe-home-"));
     expect(capturedHomeAssetFiles.value).toEqual(["auth.json", "config.toml"]);
-    expect(runtimeInput?.workspaceLocalDir).toContain(`${os.tmpdir()}/paperclip-codex-envtest-`);
+    expect(runtimeInput?.workspaceLocalDir).toContain(path.join(os.tmpdir(), "paperclip-codex-envtest-"));
     expect(runtimeInput?.workspaceLocalDir).not.toBe("/remote/workspace");
     expect(await fs.stat(runtimeInput!.workspaceLocalDir).catch(() => null)).toBeNull();
     expect(runtimeInput?.target?.remoteCwd).toBe("/remote/workspace");
