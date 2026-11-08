@@ -434,6 +434,14 @@ export const issueExecutionMonitorPolicySchema = z.object({
 export const issueExecutionPolicySchema = z.object({
   mode: z.enum(ISSUE_EXECUTION_POLICY_MODES).optional().default("normal"),
   commentRequired: z.boolean().optional().default(true),
+  maxExecutionAttempts: z
+    .number()
+    .int()
+    .positive()
+    .max(100)
+    .optional()
+    .nullable()
+    .default(null),
   stages: z.array(issueExecutionStageSchema).default([]),
   monitor: issueExecutionMonitorPolicySchema.optional().nullable(),
   reviewPreset: lowTrustReviewPresetPolicySchema.optional(),

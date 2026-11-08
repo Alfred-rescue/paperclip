@@ -724,6 +724,21 @@ export function classifyContinuationFailure(
   };
 }
 
+export function isAutomaticRecoveryAttemptBudgetExhausted(
+  executionPolicy: unknown,
+  completedAutomaticRetries: number,
+) {
+  const configured = asNumber(
+    parseObject(executionPolicy).maxExecutionAttempts,
+    0,
+  );
+  if (!Number.isInteger(configured) || configured <= 0) return false;
+  // The finishing assignment is attempt one. Each completed automatic retry
+  // consumes one additional attempt. Recovery must stop before it schedules
+  // an attempt beyond the issue-owned budget.
+  return 1 + Math.max(0, completedAutomaticRetries) >= configured;
+}
+
 function successfulRunHandoffRecoveryEvidence(
   latestRun: LatestIssueRun,
 ): SuccessfulRunHandoffRecoveryEvidence | null {
@@ -3977,6 +3992,35 @@ export function recoveryService(
     return updated;
   }
 
+  async function enforceExecutionAttemptBudget(input: {
+    issue: typeof issues.$inferSelect;
+    latestRun: LatestIssueRun;
+    previousStatus: "todo" | "in_progress";
+    completedAutomaticRetries: number;
+  }) {
+    if (
+      !isAutomaticRecoveryAttemptBudgetExhausted(
+        input.issue.executionPolicy,
+        input.completedAutomaticRetries,
+      )
+    ) {
+      return false;
+    }
+    await escalateStrandedAssignedIssue({
+      issue: input.issue,
+      previousStatus: input.previousStatus,
+      latestRun: input.latestRun,
+      notice: {
+        title: "Execution attempt limit reached",
+        tone: "danger",
+        body:
+          "Paperclip did not start another automatic run because this issue has consumed its configured execution-attempt budget. " +
+          "The issue is blocked for an explicit remediation decision.",
+      },
+    });
+    return true;
+  }
+
   async function persistAdapterFailureRecoveryClassification(
     latestRun: NonNullable<LatestIssueRun>,
     classification: NonNullable<AdapterFailureRecoveryClassification>,
@@ -4937,6 +4981,23 @@ export function recoveryService(
           continue;
         }
 
+        if (
+          await enforceExecutionAttemptBudget({
+            issue,
+            latestRun,
+            previousStatus: "todo",
+            completedAutomaticRetries:
+              readNonEmptyString(parseObject(latestRun.contextSnapshot).retryReason) ===
+              "assignment_recovery"
+                ? 1
+                : 0,
+          })
+        ) {
+          result.escalated += 1;
+          result.issueIds.push(issue.id);
+          continue;
+        }
+
         if (await isInvocationBudgetBlocked(issue, agentId)) {
           result.skipped += 1;
           continue;
@@ -5054,6 +5115,24 @@ export function recoveryService(
           result.recentProgressExempted += 1;
         }
 
+        if (
+          await enforceExecutionAttemptBudget({
+            issue,
+            latestRun: successfulRun,
+            previousStatus: "in_progress",
+            completedAutomaticRetries:
+              readNonEmptyString(
+                parseObject(successfulRun.contextSnapshot).retryReason,
+              ) === "issue_continuation_needed"
+                ? 1
+                : 0,
+          })
+        ) {
+          result.escalated += 1;
+          result.issueIds.push(issue.id);
+          continue;
+        }
+
         if (await isInvocationBudgetBlocked(issue, agentId)) {
           result.skipped += 1;
           continue;
@@ -5169,6 +5248,24 @@ export function recoveryService(
             }
           }
         }
+      }
+
+      if (
+        latestRun &&
+        (await enforceExecutionAttemptBudget({
+          issue,
+          latestRun,
+          previousStatus: "in_progress",
+          completedAutomaticRetries:
+            readNonEmptyString(parseObject(latestRun.contextSnapshot).retryReason) ===
+            "issue_continuation_needed"
+              ? 1
+              : 0,
+        }))
+      ) {
+        result.escalated += 1;
+        result.issueIds.push(issue.id);
+        continue;
       }
 
       if (await isInvocationBudgetBlocked(issue, agentId)) {

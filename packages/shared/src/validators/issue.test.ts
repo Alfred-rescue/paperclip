@@ -451,6 +451,20 @@ describe("issue validators", () => {
     expect(parsed.requestDepth).toBe(MAX_ISSUE_REQUEST_DEPTH);
   });
 
+  it("accepts a bounded issue-owned execution-attempt limit", () => {
+    const parsed = createIssueSchema.parse({
+      title: "One-shot governed task",
+      executionPolicy: { maxExecutionAttempts: 1 },
+    });
+    expect(parsed.executionPolicy?.maxExecutionAttempts).toBe(1);
+    expect(
+      createIssueSchema.safeParse({
+        title: "Invalid attempt budget",
+        executionPolicy: { maxExecutionAttempts: 0 },
+      }).success,
+    ).toBe(false);
+  });
+
   it("defaults omitted create status to todo when an assignee is present", () => {
     expect(
       createIssueSchema.parse({

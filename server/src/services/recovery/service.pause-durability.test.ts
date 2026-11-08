@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { classifyContinuationFailure } from "./service.js";
+import {
+  classifyContinuationFailure,
+  isAutomaticRecoveryAttemptBudgetExhausted,
+} from "./service.js";
 
 const run = (errorCode: string | null) =>
   ({ errorCode } as unknown as Parameters<typeof classifyContinuationFailure>[0]);
 
 describe("pause durability: continuation retry classification", () => {
+  it("honors an issue-owned execution-attempt budget before automatic recovery", () => {
+    expect(isAutomaticRecoveryAttemptBudgetExhausted({ maxExecutionAttempts: 1 }, 0)).toBe(true);
+    expect(isAutomaticRecoveryAttemptBudgetExhausted({ maxExecutionAttempts: 2 }, 0)).toBe(false);
+    expect(isAutomaticRecoveryAttemptBudgetExhausted({ maxExecutionAttempts: 2 }, 1)).toBe(true);
+    expect(isAutomaticRecoveryAttemptBudgetExhausted({}, 99)).toBe(false);
+  });
   it.each(["workspace_git_scan_timeout", "workspace_git_scan_saturated", "workspace_git_scan_failed", "workspace_git_scan_output_limit", "workspace_git_scan_cancelled"])("does not grant %s another recovery budget", (code) => {
     expect(classifyContinuationFailure(run(code))).toMatchObject({ kind: "non_retryable", maxAttempts: 0 });
   });
