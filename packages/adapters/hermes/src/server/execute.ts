@@ -441,7 +441,7 @@ export async function execute(
   // ── Build command args ─────────────────────────────────────────────────
   // Use -Q (quiet) to get clean output: just response + session_id line
   const useQuiet = cfgBoolean(config.quiet) === true; // default false
-  const args: string[] = ["chat", "-q", prompt];
+  const args: string[] = ["chat", "--query-file", "-"];
   if (useQuiet) args.push("-Q");
 
   if (model) {
@@ -560,6 +560,7 @@ export async function execute(
   const result = await runChildProcess(ctx.runId, hermesCmd, args, {
     cwd,
     env,
+    stdin: prompt,
     timeoutSec,
     graceSec,
     onLog: wrappedOnLog,

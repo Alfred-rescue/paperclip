@@ -104,6 +104,17 @@ describe("hermes-local adapter onSpawn forwarding", () => {
     expect(opts.onSpawn).toBe(onSpawn);
   });
 
+  it("streams the prompt over stdin instead of the Windows command line", async () => {
+    const { ctx } = makeCtx();
+    await execute(ctx as any);
+
+    const mocked = vi.mocked(serverUtils.runChildProcess);
+    const lastCall = mocked.mock.calls[mocked.mock.calls.length - 1];
+    expect(lastCall[2].slice(0, 3)).toEqual(["chat", "--query-file", "-"]);
+    expect(lastCall[2].join("\n")).not.toContain("Paperclip");
+    expect((lastCall[3] as { stdin?: string }).stdin).toContain("Paperclip");
+  });
+
   it("runChildProcess opts type includes onSpawn", () => {
     // Type-level assertion: if onSpawn were removed from the type,
     // this file would fail to compile. The runtime test above catches
