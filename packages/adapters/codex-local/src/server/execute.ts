@@ -51,6 +51,7 @@ import {
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
   joinPromptSections,
+  type RunProcessResult,
 } from "@paperclipai/adapter-utils/server-utils";
 import {
   parseLocalProcessFilesystemScope,
@@ -792,6 +793,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       asNumber(config.timeoutSec, 0),
     );
     const graceSec = asNumber(config.graceSec, 20);
+    const terminalResultCleanupGraceMs = Math.max(
+      0,
+      asNumber(config.terminalResultCleanupGraceMs, 5_000),
+    );
     let effectiveExecutionCwd = targetWorkspaceRealization?.mode === "in_place"
       ? targetWorkspaceRealization.authoritativeRoot
       : adapterExecutionTargetRemoteCwd(executionTarget, cwd);
@@ -1345,6 +1350,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           },
           runLogTail: paperclipBridge?.runLogTail,
           settleRunDisposition: paperclipBridge?.settleRunDisposition,
+          terminalResultCleanup: {
+            graceMs: terminalResultCleanupGraceMs,
+            hasTerminalResult: ({ stdout }) => parseCodexJsonl(stdout).sawProtocolTerminalEvent,
+          },
           localProcessSandbox,
         });
         const cleanedStderr = stripCodexRolloutNoise(proc.stderr);
@@ -1380,7 +1389,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const toResult = (
       attempt: {
-        proc: { exitCode: number | null; signal: string | null; timedOut: boolean; stdout: string; stderr: string; errorCode?: string | null };
+        proc: RunProcessResult;
         rawStderr: string;
         parsed: ReturnType<typeof parseCodexJsonl>;
         monitor?:
@@ -1452,13 +1461,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         } as Record<string, unknown>)
         : null;
       const parsedError = typeof attempt.parsed.errorMessage === "string" ? attempt.parsed.errorMessage.trim() : "";
+      const terminalResultCleanupSucceeded = Boolean(
+        attempt.proc.terminalResultCleanup &&
+        attempt.parsed.sawSuccessfulTerminalEvent &&
+        !parsedError,
+      );
+      const effectiveExitCode = terminalResultCleanupSucceeded
+        ? 0
+        : parsedError && attempt.proc.exitCode == null
+        ? 1
+        : attempt.proc.exitCode;
       const stderrLine = firstMeaningfulStderrLine(attempt.proc.stderr);
       const fallbackErrorMessage =
         parsedError ||
         stderrLine ||
-        `Codex exited with code ${attempt.proc.exitCode ?? -1}`;
+        `Codex exited with code ${effectiveExitCode ?? -1}`;
       const transientRetryNotBefore =
-        (attempt.proc.exitCode ?? 0) !== 0
+        (effectiveExitCode ?? 0) !== 0
           ? extractCodexRetryNotBefore({
               stdout: attempt.proc.stdout,
               stderr: attempt.proc.stderr,
@@ -1466,7 +1485,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             })
           : null;
       const authRefreshFailure =
-        (attempt.proc.exitCode ?? 0) !== 0
+        (effectiveExitCode ?? 0) !== 0
           ? classifyCodexAuthRefreshFailure({
               stdout: attempt.proc.stdout,
               stderr: attempt.proc.stderr,
@@ -1474,7 +1493,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             })
           : null;
       const providerQuota =
-        (attempt.proc.exitCode ?? 0) !== 0 &&
+        (effectiveExitCode ?? 0) !== 0 &&
         !authRefreshFailure &&
         isCodexProviderQuotaError({
           stdout: attempt.proc.stdout,
@@ -1482,7 +1501,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           errorMessage: fallbackErrorMessage,
         });
       const transientUpstream =
-        (attempt.proc.exitCode ?? 0) !== 0 &&
+        (effectiveExitCode ?? 0) !== 0 &&
         !authRefreshFailure &&
         !providerQuota &&
         isCodexTransientUpstreamError({
@@ -1495,7 +1514,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         !providerQuota &&
         !transientUpstream &&
         isCodexHarnessCrash({
-          exitCode: attempt.proc.exitCode,
+          exitCode: effectiveExitCode,
           sawProtocolEvent: attempt.parsed.sawProtocolEvent,
           sawProtocolTerminalEvent: attempt.parsed.sawProtocolTerminalEvent,
         });
@@ -1504,11 +1523,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         (providerQuota ? "provider_quota" : transientUpstream || harnessCrash ? "transient_upstream" : null);
 
       return {
-        exitCode: attempt.proc.exitCode,
+        exitCode: effectiveExitCode,
         signal: attempt.proc.signal,
         timedOut: false,
         errorMessage:
-          (attempt.proc.exitCode ?? 0) === 0
+          (effectiveExitCode ?? 0) === 0
             ? null
             : fallbackErrorMessage,
         errorCode:
@@ -1545,6 +1564,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           ...(transientRetryNotBefore ? { retryNotBefore: transientRetryNotBefore.toISOString() } : {}),
           ...(transientRetryNotBefore ? { transientRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
           ...(providerQuota && transientRetryNotBefore ? { providerQuotaRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
+          ...(attempt.proc.terminalResultCleanup
+            ? { unmanagedBackgroundTask: attempt.proc.terminalResultCleanup }
+            : {}),
         },
         summary: attempt.parsed.summary,
         clearSession: Boolean((clearSessionOnMissingSession || forceFreshSession) && !resolvedSessionId),

@@ -121,6 +121,80 @@ describe("codex_local stderr fallback error derivation", () => {
     vi.clearAllMocks();
   });
 
+  it("stops an unmanaged child after a terminal Codex event and preserves the successful result", async () => {
+    const stdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "Completed" } }),
+      JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }),
+    ].join("\n");
+    const cleanupEvidence = {
+      kind: "terminal_result_cleanup",
+      stopped: true,
+      stopReason: "unmanaged_background_task_stopped",
+      reason: "unmanaged background task stopped; no durable live path",
+      terminalResultSeen: true,
+      signal: "SIGTERM",
+      forceKilled: false,
+    } as const;
+    runAdapterExecutionTargetProcess.mockImplementation(async (_runId, _target, _command, _args, options) => {
+      expect(options.terminalResultCleanup?.graceMs).toBe(5_000);
+      expect(options.terminalResultCleanup?.hasTerminalResult({ stdout, stderr: "" })).toBe(true);
+      expect(options.terminalResultCleanup?.hasTerminalResult({
+        stdout: JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "working" } }),
+        stderr: "",
+      })).toBe(false);
+      return {
+        exitCode: null,
+        signal: "SIGTERM",
+        timedOut: false,
+        stdout,
+        stderr: "",
+        pid: 123,
+        startedAt: new Date().toISOString(),
+        terminalResultCleanup: cleanupEvidence,
+      };
+    });
+
+    const result = await execute(buildContext() as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.errorMessage).toBeNull();
+    expect(result.summary).toBe("Completed");
+    expect(result.resultJson).toMatchObject({ unmanagedBackgroundTask: cleanupEvidence });
+  });
+
+  it("preserves a protocol failure when terminal-result cleanup stops the lingering child", async () => {
+    const stdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({ type: "turn.failed", error: { message: "model rejected the task" } }),
+    ].join("\n");
+    const cleanupEvidence = {
+      kind: "terminal_result_cleanup",
+      stopped: true,
+      stopReason: "unmanaged_background_task_stopped",
+      reason: "unmanaged background task stopped; no durable live path",
+      terminalResultSeen: true,
+      signal: "SIGTERM",
+      forceKilled: false,
+    } as const;
+    runAdapterExecutionTargetProcess.mockResolvedValue({
+      exitCode: null,
+      signal: "SIGTERM",
+      timedOut: false,
+      stdout,
+      stderr: "",
+      pid: 123,
+      startedAt: new Date().toISOString(),
+      terminalResultCleanup: cleanupEvidence,
+    });
+
+    const result = await execute(buildContext() as never);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.errorMessage).toBe("model rejected the task");
+    expect(result.resultJson).toMatchObject({ unmanagedBackgroundTask: cleanupEvidence });
+  });
+
   it("skips the benign YOLO approvals warning and surfaces the real stderr error", async () => {
     mockFailedProcess(
       [

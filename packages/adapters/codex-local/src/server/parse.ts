@@ -33,6 +33,7 @@ export function parseCodexJsonl(stdout: string) {
   let errorMessage: string | null = null;
   let sawProtocolEvent = false;
   let sawProtocolTerminalEvent = false;
+  let sawSuccessfulTerminalEvent = false;
   const usage = {
     inputTokens: 0,
     cachedInputTokens: 0,
@@ -72,6 +73,7 @@ export function parseCodexJsonl(stdout: string) {
     }
 
     if (type === "turn.completed") {
+      sawSuccessfulTerminalEvent = true;
       const usageObj = parseObject(event.usage);
       usage.inputTokens = asNumber(usageObj.input_tokens, usage.inputTokens);
       usage.cachedInputTokens = asNumber(usageObj.cached_input_tokens, usage.cachedInputTokens);
@@ -94,6 +96,7 @@ export function parseCodexJsonl(stdout: string) {
     errorMessage,
     sawProtocolEvent,
     sawProtocolTerminalEvent,
+    sawSuccessfulTerminalEvent,
   };
 }
 
